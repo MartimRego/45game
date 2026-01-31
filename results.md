@@ -31,6 +31,13 @@ Where:
 - A `1` bit means the slot is still available.
 - The query output shows `Win% before roll` (pre-roll state) and `Win% after seeing roll` (post-roll state, acting optimally).
 
+## Simulate a full game
+
+You can simulate a full 6-roll game and see if you would win when following the optimal policy:
+
+- `python solver.py --simulate 132563`
+- Add `--trace` to see the chosen slot each turn.
+
 ## Policy summary over reachable states
 
 This section lists, for each reachable remaining-slot set `R`, what the optimal choice is for each roll `X` as a function of current score. (It only includes **pre-roll states reachable under the optimal policy**.)

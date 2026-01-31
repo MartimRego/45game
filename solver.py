@@ -299,6 +299,14 @@ def render_results_markdown() -> str:
     lines.append("- The query output shows `Win% before roll` (pre-roll state) and `Win% after seeing roll` (post-roll state, acting optimally).")
     lines.append("")
 
+    lines.append("## Simulate a full game")
+    lines.append("")
+    lines.append("You can simulate a full 6-roll game and see if you would win when following the optimal policy:")
+    lines.append("")
+    lines.append("- `python solver.py --simulate 132563`")
+    lines.append("- Add `--trace` to see the chosen slot each turn.")
+    lines.append("")
+
     lines.append("## Policy summary over reachable states")
     lines.append("")
     lines.append("This section lists, for each reachable remaining-slot set `R`, what the optimal choice is for each roll `X` as a function of current score. (It only includes **pre-roll states reachable under the optimal policy**.)")
@@ -463,6 +471,21 @@ def _parse_args() -> object:
         help="Query the optimal action for a given (mask,score,roll).",
     )
     parser.add_argument(
+        "--simulate",
+        type=str,
+        default=None,
+        metavar="ROLLS",
+        help=(
+            "Simulate playing the optimal policy for a given roll sequence, e.g. 132563. "
+            "Outputs final score and win/lose."
+        ),
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="With --simulate, print a step-by-step trace of chosen slots and scores.",
+    )
+    parser.add_argument(
         "--mask",
         type=str,
         default=None,
@@ -480,6 +503,49 @@ def _parse_args() -> object:
     return parser.parse_args()
 
 
+def _parse_roll_sequence(text: str) -> list[int]:
+    cleaned = text.strip().replace(" ", "").replace("_", "")
+    if not cleaned:
+        raise ValueError("empty roll sequence")
+    if any(ch not in "123456" for ch in cleaned):
+        raise ValueError("roll sequence must contain only digits 1-6")
+    return [int(ch) for ch in cleaned]
+
+
+def simulate_rolls(rolls: list[int], *, trace: bool = False) -> tuple[int, bool]:
+    """Simulate the game under the optimal policy given an observed roll sequence.
+
+    Returns (final_score, did_win).
+    """
+
+    mask = FULL_MASK
+    score = 0
+
+    if len(rolls) > len(SLOTS):
+        raise ValueError(f"roll sequence too long: got {len(rolls)}, expected at most {len(SLOTS)}")
+
+    for turn, roll in enumerate(rolls, start=1):
+        if mask == 0:
+            break
+
+        action = best_action(mask, score, roll)
+        pts = POINTS[action][roll]
+        next_mask = mask & ~(1 << action)
+        next_score = score + pts
+
+        if trace:
+            print(
+                f"Turn {turn}: roll={roll} | choose={SLOTS[action].name} (+{pts}) | "
+                f"score {score}->{next_score} | mask {mask_to_bits_slot_order(mask)}->{mask_to_bits_slot_order(next_mask)}"
+            )
+
+        mask, score = next_mask, next_score
+
+    # If the sequence is shorter than 6, this is the score after consuming the provided rolls.
+    did_win = score >= TARGET_SCORE and mask == 0
+    return score, did_win
+
+
 def main() -> int:
     args = _parse_args()
 
@@ -488,6 +554,31 @@ def main() -> int:
             raise SystemExit("--query requires --mask, --score, and --roll")
         mask = parse_mask(args.mask)
         print(query(mask, args.score, args.roll))
+        return 0
+
+    if args.simulate is not None:
+        try:
+            rolls = _parse_roll_sequence(args.simulate)
+        except ValueError as e:
+            raise SystemExit(f"Invalid --simulate rolls: {e}")
+
+        try:
+            final_score, did_win = simulate_rolls(rolls, trace=args.trace)
+        except ValueError as e:
+            raise SystemExit(f"Simulation error: {e}")
+
+        if len(rolls) != len(SLOTS):
+            print(
+                f"Simulated {len(rolls)}/{len(SLOTS)} turns under optimal policy. "
+                f"Current score: {final_score}."
+            )
+            print("Provide 6 rolls to determine win/lose.")
+            return 0
+
+        # Full game simulated.
+        outcome = "WIN" if did_win else "LOSE"
+        print(f"Final score: {final_score}")
+        print(f"Outcome: {outcome} (target={TARGET_SCORE})")
         return 0
 
     p_win = win_probability_from_start()
