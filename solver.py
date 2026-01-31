@@ -604,10 +604,6 @@ def _prob_post_opt(mask: int, score: int, roll: int) -> float:
     return float((v_post(mask, score, roll) + 1) / 2)
 
 
-def _format_slot_number(action_index: int) -> str:
-    return str(action_index + 1)
-
-
 def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) -> str:
     """Evaluate a played game (rolls + chosen moves) into skill and luck.
 
@@ -631,14 +627,15 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     skill_terms: list[tuple[float, float]] = []  # (weight, normalized_skill)
     luck_terms: list[tuple[float, float]] = []  # (weight, normalized_luck)
 
-    # Critical points.
-    critical_decision: dict[str, object] | None = None
-    critical_roll: dict[str, object] | None = None
-
     opt_trace_lines: list[str] = []
     chosen_trace_lines: list[str] = []
+    timeline_lines: list[str] = []
+    mistakes: list[dict[str, object]] = []
+    saw_na = False
 
     for turn, roll in enumerate(rolls, start=1):
+        p_before_roll = _prob_pre(chosen_mask, chosen_score)
+
         # ===== Luck (based on pre-roll state, before observing the roll) =====
         pre_mask, pre_score = chosen_mask, chosen_score
         q_values = [_prob_post_opt(pre_mask, pre_score, r) for r in range(1, 7)]
@@ -657,32 +654,13 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
             luck_i = luck_val
         luck_terms.append((roll_swing, 0.5 if luck_i is None else luck_i))
 
-        # Track critical roll (largest swing).
-        if critical_roll is None or roll_swing > float(critical_roll["swing"]):
-            best_rolls = [i + 1 for i, q in enumerate(q_values) if abs(q - q_best) <= 1e-15]
-            worst_rolls = [i + 1 for i, q in enumerate(q_values) if abs(q - q_worst) <= 1e-15]
-            critical_roll = {
-                "turn": turn,
-                "mask": pre_mask,
-                "mask_bits": mask_to_bits_slot_order(pre_mask),
-                "score": pre_score,
-                "observed": roll,
-                "best_rolls": best_rolls,
-                "worst_rolls": worst_rolls,
-                "q_obs": q_obs,
-                "q_best": q_best,
-                "q_worst": q_worst,
-                "swing": roll_swing,
-            }
-
         # ===== Optimal path step =====
         opt_action = best_action(opt_mask, opt_score, roll)
         opt_pts = POINTS[opt_action][roll]
         opt_next_mask = opt_mask & ~(1 << opt_action)
         opt_next_score = opt_score + opt_pts
         opt_trace_lines.append(
-            f"Turn {turn}: roll={roll} | choose={_format_slot_number(opt_action)}:{SLOTS[opt_action].name} (+{opt_pts}) | "
-            f"score {opt_score}->{opt_next_score} | mask {mask_to_bits_slot_order(opt_mask)}->{mask_to_bits_slot_order(opt_next_mask)}"
+            f"Turn {turn}: roll={roll} | choose={SLOTS[opt_action].name} (+{opt_pts}) | score {opt_score}->{opt_next_score}"
         )
         opt_mask, opt_score = opt_next_mask, opt_next_score
 
@@ -692,7 +670,7 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
             raise ValueError(f"invalid move at turn {turn}: {chosen_action + 1}")
         if not (chosen_mask & (1 << chosen_action)):
             raise ValueError(
-                f"illegal move at turn {turn}: slot {_format_slot_number(chosen_action)}:{SLOTS[chosen_action].name} already used"
+                f"illegal move at turn {turn}: slot {SLOTS[chosen_action].name} already used"
             )
 
         # Compute p(action) for all available actions given the observed roll.
@@ -721,41 +699,43 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
 
         skill_terms.append((decision_swing, 1.0 if skill_i is None else skill_i))
 
-        # Determine best/worst actions for reporting.
-        best_actions = [a for a, p in action_ps if abs(p - p_best) <= 1e-15]
-        worst_actions = [a for a, p in action_ps if abs(p - p_worst) <= 1e-15]
+        # Track top mistakes: turns where the chosen move is strictly suboptimal.
+        eps = 1e-15
+        if p_best - p_chosen > eps:
+            best_action_names = [SLOTS[a].name for a, p in action_ps if abs(p - p_best) <= eps]
+            mistakes.append(
+                {
+                    "turn": turn,
+                    "roll": roll,
+                    "chosen": SLOTS[chosen_action].name,
+                    "best": best_action_names,
+                    "p_best": p_best,
+                    "p_chosen": p_chosen,
+                    "regret": p_best - p_chosen,
+                }
+            )
 
-        if critical_decision is None or decision_swing > float(critical_decision["swing"]):
-            critical_decision = {
-                "turn": turn,
-                "mask": chosen_mask,
-                "mask_bits": mask_to_bits_slot_order(chosen_mask),
-                "score": chosen_score,
-                "roll": roll,
-                "chosen_action": chosen_action,
-                "chosen_points": chosen_pts,
-                "p_chosen": p_chosen,
-                "best_actions": best_actions,
-                "worst_actions": worst_actions,
-                "p_best": p_best,
-                "p_worst": p_worst,
-                "swing": decision_swing,
-            }
+        if trace:
+            skill_is_na = skill_i is None
+            luck_is_na = luck_i is None
+            saw_na = saw_na or skill_is_na or luck_is_na
+            skill_text = "N/A" if skill_is_na else str(int(round(skill_i * 100)))
+            luck_text = "N/A" if luck_is_na else str(int(round(luck_i * 100)))
+            skill_suffix = "" if skill_is_na else "%"
+            luck_suffix = "" if luck_is_na else "%"
+            extra = f" | skill={skill_text}{skill_suffix} luck={luck_text}{luck_suffix}"
+        else:
+            extra = ""
 
         chosen_trace_lines.append(
-            f"Turn {turn}: roll={roll} | choose={_format_slot_number(chosen_action)}:{SLOTS[chosen_action].name} (+{chosen_pts}) | "
-            f"score {chosen_score}->{chosen_next_score} | mask {mask_to_bits_slot_order(chosen_mask)}->{mask_to_bits_slot_order(chosen_next_mask)}"
-            + (
-                (
-                    " | "
-                    + f"skill={(skill_i * 100):.1f}%" if skill_i is not None else " | skill=N/A"
-                )
-                + (
-                    f" luck={(luck_i * 100):.1f}%" if luck_i is not None else " luck=N/A"
-                )
-                if trace
-                else ""
-            )
+            f"Turn {turn}: roll={roll} | choose={SLOTS[chosen_action].name} (+{chosen_pts}) | "
+            f"score {chosen_score}->{chosen_next_score}{extra}"
+        )
+
+        # Win% timeline (chosen path): before roll -> after seeing roll (if act optimally) -> after chosen move.
+        timeline_lines.append(
+            f"Turn {turn}: "
+            f"{p_before_roll * 100:.1f}% -> {q_obs * 100:.1f}% -> {p_chosen * 100:.1f}%"
         )
 
         chosen_mask, chosen_score = chosen_next_mask, chosen_next_score
@@ -766,6 +746,9 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     skill_score = 100.0 if sum_skill_w <= 0 else 100.0 * sum(w * s for w, s in skill_terms) / sum_skill_w
     luck_score = 100.0 if sum_luck_w <= 0 else 100.0 * sum(w * l for w, l in luck_terms) / sum_luck_w
 
+    skill_score_int = int(round(skill_score))
+    luck_score_int = int(round(luck_score))
+
     # Final game outcome for chosen path.
     did_win = chosen_score >= TARGET_SCORE
 
@@ -773,8 +756,8 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     out: list[str] = []
     out.append("Here is the review of today's game:")
     out.append("")
-    out.append(f"Skill {skill_score:.1f}/100 (How good the decisions were)")
-    out.append(f"Luck {luck_score:.1f}/100 (How lucky the rolls were)")
+    out.append(f"Skill {skill_score_int}/100 (How good the decisions were)")
+    out.append(f"Luck {luck_score_int}/100 (How lucky the rolls were)")
     out.append("")
     out.append(f"Final score: {chosen_score} ({'WIN' if did_win else 'LOSE'}; target={TARGET_SCORE})")
     out.append("")
@@ -785,48 +768,35 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     out.append("Here's the path that was chosen:")
     out.append("")
     out.extend(chosen_trace_lines)
-    out.append("")
-    out.append("Critical decision:")
-    out.append("")
-    if critical_decision is None:
-        out.append("(none)")
-    else:
-        cd = critical_decision
-        best_str = ", ".join(
-            f"{_format_slot_number(a)}:{SLOTS[a].name}" for a in cd["best_actions"]  # type: ignore[index]
-        )
-        worst_str = ", ".join(
-            f"{_format_slot_number(a)}:{SLOTS[a].name}" for a in cd["worst_actions"]  # type: ignore[index]
-        )
+
+    if saw_na:
+        out.append("")
         out.append(
-            f"Turn {cd['turn']} | state mask={cd['mask_bits']} score={cd['score']} | roll={cd['roll']}"
+            "Note: 'N/A' appears when no roll/action can change the eventual Win% "
+            "from that state (the game outcome is already determined as guaranteed WIN or LOSE)."
         )
-        out.append(
-            f"Chosen: {_format_slot_number(cd['chosen_action'])}:{SLOTS[cd['chosen_action']].name} (+{cd['chosen_points']})"
-        )
-        out.append(
-            f"Win% chosen: {float(cd['p_chosen']) * 100:.3f}% | Win% best: {float(cd['p_best']) * 100:.3f}% | Win% worst: {float(cd['p_worst']) * 100:.3f}%"
-        )
-        out.append(f"Decision swing: {float(cd['swing']) * 100:.3f}%")
-        out.append(f"Best option(s): {best_str}")
-        out.append(f"Worst option(s): {worst_str}")
 
     out.append("")
-    out.append("Critical roll:")
+    out.append("Win% timeline (chosen path):")
     out.append("")
-    if critical_roll is None:
-        out.append("(none)")
+    out.append("Each turn shows: Win% before roll -> Win% after seeing roll (best play) -> Win% after chosen move")
+    out.append("")
+    out.extend(timeline_lines)
+
+    out.append("")
+    out.append("Top mistakes (biggest Win% regret):")
+    out.append("")
+    if not mistakes:
+        out.append("No mistakes: every move was optimal for the observed rolls.")
     else:
-        cr = critical_roll
-        out.append(
-            f"Turn {cr['turn']} | state mask={cr['mask_bits']} score={cr['score']} | observed roll={cr['observed']}"
-        )
-        out.append(
-            f"Win% if observed roll: {float(cr['q_obs']) * 100:.3f}% | best roll Win%: {float(cr['q_best']) * 100:.3f}% | worst roll Win%: {float(cr['q_worst']) * 100:.3f}%"
-        )
-        out.append(f"Roll swing: {float(cr['swing']) * 100:.3f}%")
-        out.append(f"Best roll(s): {', '.join(str(r) for r in cr['best_rolls'])}")
-        out.append(f"Worst roll(s): {', '.join(str(r) for r in cr['worst_rolls'])}")
+        mistakes.sort(key=lambda m: float(m["regret"]), reverse=True)
+        for m in mistakes[:5]:
+            best_str = ", ".join(m["best"])  # type: ignore[index]
+            out.append(
+                f"Turn {m['turn']} (roll={m['roll']}): chose {m['chosen']}, best was {best_str} "
+                f"({float(m['p_chosen']) * 100:.1f}% vs {float(m['p_best']) * 100:.1f}%, "
+                f"-{float(m['regret']) * 100:.1f}%)"
+            )
 
     return "\n".join(out)
 
