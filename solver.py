@@ -351,11 +351,38 @@ def query(mask: int, score: int, roll: int) -> str:
     p_before = (v_pre(mask, score) + 1) / 2
     p_after_observe = (v_post(mask, score, roll) + 1) / 2
 
+    def best_next_rolls_from(pre_mask: int, pre_score: int) -> tuple[list[int], float] | None:
+        """Return (rolls, max_win_prob) for the next roll, from a pre-roll state.
+
+        If pre_mask == 0, the game is over and there is no next roll.
+
+        For a particular roll r, conditional win probability is:
+        (v_post(pre_mask, pre_score, r) + 1) / 2
+        because after observing r we then act optimally.
+        """
+
+        if pre_mask == 0:
+            return None
+
+        best_p: float | None = None
+        best_rolls: list[int] = []
+        for r in range(1, 7):
+            p_r = float((v_post(pre_mask, pre_score, r) + 1) / 2)
+            if best_p is None or p_r > best_p + 1e-15:
+                best_p = p_r
+                best_rolls = [r]
+            elif abs(p_r - best_p) <= 1e-15:
+                best_rolls.append(r)
+
+        assert best_p is not None
+        return best_rolls, best_p
+
     a = best_action(mask, score, roll)
     pts = POINTS[a][roll]
     next_mask = mask & ~(1 << a)
     next_score = score + pts
     p_after_action = (v_pre(next_mask, next_score) + 1) / 2
+    best_next_for_opt = best_next_rolls_from(next_mask, next_score)
 
     # Compute outcomes for all available actions.
     outcomes: list[tuple[float, int, int, int]] = []
@@ -390,15 +417,29 @@ def query(mask: int, score: int, roll: int) -> str:
     lines.append(f"Best slot: {SLOTS[a].name} (+{pts} points)")
     lines.append(f"Next state: mask={next_remaining_bits}, score={next_score}")
     lines.append(f"Win% after taking best action: {float(p_after_action) * 100:.3f}%")
+    if best_next_for_opt is None:
+        lines.append("Next roll to root for: (game already ended)")
+    else:
+        rolls, p_best = best_next_for_opt
+        roll_text = ",".join(str(r) for r in rolls)
+        lines.append(f"Next roll to root for: {roll_text} (Win% if rolled: {p_best * 100:.3f}%)")
     lines.append("")
     lines.append("All options (if you choose differently):")
-    lines.append("| Choice | Points | Next mask | Next score | Win% |")
-    lines.append("|---|---:|---:|---:|---:|")
+    lines.append("| Choice | Points | Next mask | Next score | Win% | Root-for roll(s) | Win% if rolled |")
+    lines.append("|---|---:|---:|---:|---:|---|---:|")
     for p_float, action, nm, ns in outcomes:
         marker = "*" if action == a else ""
         name = f"{SLOTS[action].name}{marker}"
+        best_next = best_next_rolls_from(nm, ns)
+        if best_next is None:
+            root_for = "(ended)"
+            root_for_p = "-"
+        else:
+            rolls, p_best = best_next
+            root_for = ",".join(str(r) for r in rolls)
+            root_for_p = f"{p_best * 100:.3f}%"
         lines.append(
-            f"| {name} | {POINTS[action][roll]} | {mask_to_bits_slot_order(nm)} | {ns} | {p_float * 100:.3f}% |"
+            f"| {name} | {POINTS[action][roll]} | {mask_to_bits_slot_order(nm)} | {ns} | {p_float * 100:.3f}% | {root_for} | {root_for_p} |"
         )
 
     lines.append("")
