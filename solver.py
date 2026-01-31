@@ -761,10 +761,14 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     out.append("")
     out.append(f"Final score: {chosen_score} ({'WIN' if did_win else 'LOSE'}; target={TARGET_SCORE})")
     out.append("")
-    out.append("Here's what the optimal path would've been:")
-    out.append("")
-    out.extend(opt_trace_lines)
-    out.append("")
+    played_optimally = len(mistakes) == 0
+
+    if not played_optimally:
+        out.append("Here's what the optimal path would've been:")
+        out.append("")
+        out.extend(opt_trace_lines)
+        out.append("")
+
     out.append("Here's the path that was chosen:")
     out.append("")
     out.extend(chosen_trace_lines)
@@ -775,6 +779,10 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
             "Note: 'N/A' appears when no roll/action can change the eventual Win% "
             "from that state (the game outcome is already determined as guaranteed WIN or LOSE)."
         )
+
+    if played_optimally:
+        out.append("")
+        out.append("Perfect play! You followed the optimal policy for every roll.")
 
     out.append("")
     out.append("Win% timeline (chosen path):")
@@ -787,7 +795,7 @@ def evaluate_game(rolls: list[int], moves: list[int], *, trace: bool = False) ->
     out.append("Top mistakes (biggest Win% regret):")
     out.append("")
     if not mistakes:
-        out.append("No mistakes: every move was optimal for the observed rolls.")
+        out.append("No mistakes were made!")
     else:
         mistakes.sort(key=lambda m: float(m["regret"]), reverse=True)
         for m in mistakes[:5]:
