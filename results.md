@@ -38,6 +38,16 @@ You can simulate a full 6-roll game and see if you would win when following the 
 - `python solver.py --simulate 132563`
 - Add `--trace` to see the chosen slot each turn.
 
+## Evaluate skill and luck
+
+You can score a played game by providing both the rolls and the chosen moves:
+
+- `python solver.py --evaluate --rolls 132563 --moves 213645`
+- Add `--trace` to show per-turn skill/luck numbers in the chosen trace.
+
+Move digits are slot numbers in this fixed order:
+- `1=x3, 2=flip, 3=+4only12, 4=x2even, 5=+4odd, 6=bin`
+
 ## Policy summary over reachable states
 
 This section lists, for each reachable remaining-slot set `R`, what the optimal choice is for each roll `X` as a function of current score. (It only includes **pre-roll states reachable under the optimal policy**.)
